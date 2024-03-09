@@ -11,6 +11,8 @@ use Illuminate\Support\Str;
 use Laravel\Socialite\Two\InvalidStateException;
 use SocialiteProviders\Manager\OAuth2\AbstractProvider;
 use SocialiteProviders\Manager\OAuth2\User;
+use Illuminate\Support\Facades\Log;
+
 
 class Provider extends AbstractProvider
 {
@@ -22,7 +24,12 @@ class Provider extends AbstractProvider
     protected $scopes = [
         'openid',
     ];
-
+    /**
+     * The scope separator used for Azure AD B2C authentication.
+     * https://learn.microsoft.com/en-us/azure/active-directory-b2c/openid-connect#get-a-token:~:text=example%20b2c_1_sign_in.-,HTTP,-Copy
+     * 
+     * @var string
+     */
     protected $scopeSeparator = ' ';
 
     /**
@@ -75,9 +82,9 @@ class Provider extends AbstractProvider
     /**
      * Get OpenID Configuration.
      *
-     * @return mixed
-     *
      * @throws Laravel\Socialite\Two\InvalidStateException
+     *
+     * @return mixed
      */
     private function getOpenIdConfiguration()
     {
@@ -161,24 +168,25 @@ class Provider extends AbstractProvider
      *   aud: MUST include client_id for this client.
      *   exp: MUST time() < exp.
      *
-     * @param  string  $idToken
-     * @return array
+     * @param string $idToken
      *
      * @throws Laravel\Socialite\Two\InvalidStateException
+     *
+     * @return array
      */
     private function validateIdToken($idToken)
     {
         try {
             // payload validation
             $payload = explode('.', $idToken);
-            $payloadJson = json_decode(base64_decode(str_pad(strtr($payload[1], '-_', '+/'), strlen($payload[1]) % 4, '=')), true);
+            $payloadJson = json_decode(base64_decode(str_pad(strtr($payload[1], '-_', '+/'), strlen($payload[1]) % 4, '=', STR_PAD_RIGHT)), true);
 
             // iss validation
             if (strcmp($payloadJson['iss'], $this->getOpenIdConfiguration()->issuer)) {
                 throw new InvalidStateException('iss on id_token does not match issuer value on the OpenID configuration');
             }
             // aud validation
-            if (! str_contains($payloadJson['aud'], $this->config['client_id'])) {
+            if (strpos($payloadJson['aud'], $this->config['client_id']) === false) {
                 throw new InvalidStateException('aud on id_token does not match the client_id for this application');
             }
             // exp validation
@@ -189,7 +197,7 @@ class Provider extends AbstractProvider
             // signature validation and return claims
             return (array) JWT::decode($idToken, JWK::parseKeySet($this->getJWTKeys(), $this->getConfig('default_algorithm')));
         } catch (Exception $ex) {
-            throw new InvalidStateException("Error on validating id_token. {$ex}");
+            throw new InvalidStateException("Error on validationg id_token. {$ex}");
         }
     }
 
@@ -198,11 +206,18 @@ class Provider extends AbstractProvider
      */
     protected function mapUserToObject(array $user)
     {
+        //check is $user['email'] is array - it shouldn't be, but we are not sure
+        if (is_array($user['email'])) {
+            $email = $user['email'][0];
+        } else {
+            $email = $user['email'];
+        }
+
         return (new User())->setRaw($user)->map([
             'id'       => $user['sub'],
             'nickname' => $user['name'],
             'name'     => $user['name'],
-            'email'    => $user['emails'][0],
+            'email'    => $email,
         ]);
     }
 
